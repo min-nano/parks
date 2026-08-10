@@ -129,22 +129,48 @@ jobs:
       - name: Smoke test the deployment
         env:
           URL: ${{ steps.deploy.outputs.url }}
+          # Set only when the Netlify site keeps visitor access control on for
+          # deploy previews. Format: "user:password".
+          PREVIEW_BASIC_AUTH: ${{ secrets.NETLIFY_PREVIEW_BASIC_AUTH }}
         run: |
-          body=''
+          args=(--silent --show-error --location --max-time 20)
+          if [ -n "$PREVIEW_BASIC_AUTH" ]; then
+            args+=(--user "$PREVIEW_BASIC_AUTH")
+          fi
+
+          status='000'
           for attempt in 1 2 3 4 5; do
-            if body=$(curl --silent --show-error --location --fail --max-time 20 \
-              "$URL/api/health"); then
-              break
-            fi
-            echo "Attempt $attempt failed; the deployment may still be starting."
+            status=$(curl "${args[@]}" -o body.txt -w '%{http_code}' \
+              "$URL/api/health" || echo '000')
+            [ "$status" = '200' ] && break
+            echo "Attempt $attempt: HTTP $status — the deployment may still be starting."
             sleep 10
           done
 
+          body=$(cat body.txt 2>/dev/null || true)
           echo "$body"
+
+          if [ "$status" != '200' ]; then
+            echo "::error::Health check for $URL returned HTTP $status"
+            case "$status" in
+              401|403)
+                echo "::error::The deploy is behind Netlify visitor access control."
+                echo "::error::Either turn it off for deploy previews under Site"
+                echo "::error::configuration > Access & security > Visitor access, or set the"
+                echo "::error::NETLIFY_PREVIEW_BASIC_AUTH secret to 'user:password'."
+                # Printed so the next run identifies the scheme without guesswork.
+                echo '--- response headers ---'
+                curl --silent --show-error --location --max-time 20 --head \
+                  "$URL/api/health" || true
+                ;;
+            esac
+            exit 1
+          fi
+
           case "$body" in
             *'"status":"ok"'*) ;;
             *)
-              echo "::error::Health check failed for $URL"
+              echo "::error::$URL answered 200 but not with a healthy body."
               exit 1
               ;;
           esac
