@@ -36,7 +36,6 @@ updates:
       drizzle:
         patterns:
           - 'drizzle-orm'
-          - 'drizzle-kit'
 
   - package-ecosystem: github-actions
     directory: /

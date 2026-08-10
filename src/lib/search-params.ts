@@ -158,20 +158,34 @@ export function resolveVehicle(query: VehicleQuery): ParseResult<VehicleSpec | n
   };
 }
 
-/** Drops blank values so `?radius=` falls back to the default instead of failing. */
-export function toRecord(params: URLSearchParams): Record<string, string> {
+/**
+ * Copies the known query parameters into a plain object for zod.
+ *
+ * Iterating our own key list rather than the caller's parameters means no
+ * property name ever comes from the request, which keeps a crafted
+ * `?__proto__=…` from reaching the object being built. Blank values are dropped
+ * so `?radius=` falls back to the default instead of failing validation.
+ */
+export function toRecord(
+  params: URLSearchParams,
+  allowedKeys: readonly string[],
+): Record<string, string> {
   const record: Record<string, string> = {};
-  for (const [key, value] of params) {
-    if (value !== '') record[key] = value;
+  for (const key of allowedKeys) {
+    const value = params.get(key);
+    if (value !== null && value !== '') record[key] = value;
   }
   return record;
 }
+
+const SEARCH_QUERY_KEYS = Object.keys(searchQuerySchema.shape);
+const ESTIMATE_QUERY_KEYS = Object.keys(estimateQuerySchema.shape);
 
 export function parseSearchQuery(
   params: URLSearchParams,
   now: Date = new Date(),
 ): ParseResult<ParsedSearchQuery> {
-  const parsed = searchQuerySchema.safeParse(toRecord(params));
+  const parsed = searchQuerySchema.safeParse(toRecord(params, SEARCH_QUERY_KEYS));
   if (!parsed.success) {
     return { ok: false, message: 'invalid search query', issues: formatIssues(parsed.error) };
   }
@@ -206,7 +220,7 @@ export function parseEstimateQuery(
   params: URLSearchParams,
   now: Date = new Date(),
 ): ParseResult<ParsedEstimateQuery> {
-  const parsed = estimateQuerySchema.safeParse(toRecord(params));
+  const parsed = estimateQuerySchema.safeParse(toRecord(params, ESTIMATE_QUERY_KEYS));
   if (!parsed.success) {
     return { ok: false, message: 'invalid query', issues: formatIssues(parsed.error) };
   }

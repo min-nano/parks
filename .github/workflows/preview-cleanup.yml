@@ -6,6 +6,9 @@ on:
   pull_request:
     types: [closed]
 
+# Teardown talks only to Neon and Netlify, so the GitHub token needs nothing.
+permissions: {}
+
 concurrency:
   group: preview-cleanup-${{ github.event.pull_request.number }}
   cancel-in-progress: false
@@ -30,7 +33,7 @@ jobs:
       # repository should not be reported as a failure.
       - name: Delete the Neon branch
         if: steps.credentials.outputs.neon == 'true'
-        uses: neondatabase/delete-branch-action@v3
+        uses: neondatabase/delete-branch-action@4468d825d5a88ef4012f1705a82f02ec3072f776 # v3.2.1
         with:
           project_id: ${{ secrets.NEON_PROJECT_ID }}
           api_key: ${{ secrets.NEON_API_KEY }}

@@ -17,8 +17,36 @@ const NOW = new Date('2026-08-10T12:00:00.000Z');
 const params = (query: string) => new URLSearchParams(query);
 
 describe('toRecord', () => {
+  const keys = ['lat', 'radius', 'ev'];
+
   it('drops blank values so defaults still apply', () => {
-    expect(toRecord(params('lat=35&radius=&ev='))).toEqual({ lat: '35' });
+    expect(toRecord(params('lat=35&radius=&ev='), keys)).toEqual({ lat: '35' });
+  });
+
+  it('ignores parameters that are not on the allow list', () => {
+    expect(toRecord(params('lat=35&surprise=1'), keys)).toEqual({ lat: '35' });
+  });
+
+  it('never lets a request name a property on the result', () => {
+    const hostile = params('__proto__=polluted&constructor=polluted&lat=35');
+
+    const record = toRecord(hostile, keys);
+
+    expect(record).toEqual({ lat: '35' });
+    expect(Object.getPrototypeOf(record)).toBe(Object.prototype);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
+describe('query parsing rejects hostile parameter names', () => {
+  it('ignores __proto__ in a search query', () => {
+    const result = parseSearchQuery(
+      params('lat=35.658&lng=139.7016&__proto__=polluted'),
+      NOW,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });
 

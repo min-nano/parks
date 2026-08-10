@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The jobs only read the checkout; nothing writes back to the repository.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

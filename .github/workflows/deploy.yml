@@ -7,6 +7,11 @@ on:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
+# Deploying needs the checkout and nothing else; Netlify and Neon are reached
+# with their own tokens.
+permissions:
+  contents: read
+
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
@@ -68,7 +73,7 @@ jobs:
       - name: Create the Neon branch for this pull request
         id: neon
         if: env.IS_PRODUCTION != 'true'
-        uses: neondatabase/create-branch-action@v6
+        uses: neondatabase/create-branch-action@72ed4f69a12b6be9c16aebfad893f6a21e9aba8b # v6.4.0
         with:
           project_id: ${{ secrets.NEON_PROJECT_ID }}
           api_key: ${{ secrets.NEON_API_KEY }}

@@ -115,6 +115,7 @@ npm run lint            # ESLint
 npm run typecheck       # tsc --noEmit
 npm test                # Vitest
 npm run test:coverage   # カバレッジ（100% を下回ると失敗）
+npm run db:generate     # スキーマ差分から migration SQL を生成（npx で drizzle-kit を取得）
 npm run db:migrate      # 本番DBへマイグレーション
 npm run db:seed         # マイグレーション + デモデータ投入
 npm run ingest          # 取り込みを手動実行
