@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 concurrency:
@@ -17,7 +18,8 @@ jobs:
   deploy:
     name: Deploy to Netlify
     runs-on: ubuntu-latest
-    # A production push deploys; anything else gets a deploy preview URL.
+    # A production push deploys; a pull request gets its own preview site backed
+    # by its own Neon branch.
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
     env:
       IS_PRODUCTION: ${{ github.ref == 'refs/heads/main' }}
@@ -34,11 +36,24 @@ jobs:
       # A green preview deploy is a merge requirement, so missing configuration
       # has to fail loudly. Skipping would report success without having
       # verified anything.
-      - name: Require Netlify credentials
+      - name: Require credentials
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           missing=()
           [ -n "$NETLIFY_AUTH_TOKEN" ] || missing+=(NETLIFY_AUTH_TOKEN)
           [ -n "$NETLIFY_SITE_ID" ] || missing+=(NETLIFY_SITE_ID)
+
+          if [ "$IS_PRODUCTION" = 'true' ]; then
+            [ -n "$DATABASE_URL" ] || missing+=(DATABASE_URL)
+          else
+            # Previews provision their own throwaway database branch.
+            [ -n "$NEON_API_KEY" ] || missing+=(NEON_API_KEY)
+            [ -n "$NEON_PROJECT_ID" ] || missing+=(NEON_PROJECT_ID)
+          fi
+
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "::error::Missing repository secrets: ${missing[*]}."
             echo "::error::Add them under Settings > Secrets and variables > Actions."
@@ -48,36 +63,64 @@ jobs:
 
       - run: npm ci
 
-      # Only production touches the real database. A preview must never migrate
-      # it — previews run against whatever DATABASE_URL the Netlify deploy
-      # context provides (or in demo mode when it has none).
+      # One Neon branch per pull request, named after it. The action is
+      # idempotent: a later push to the same PR reuses the existing branch.
+      - name: Create the Neon branch for this pull request
+        id: neon
+        if: env.IS_PRODUCTION != 'true'
+        uses: neondatabase/create-branch-action@v6
+        with:
+          project_id: ${{ secrets.NEON_PROJECT_ID }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+          branch_name: pr-${{ github.event.pull_request.number }}
+
+      - name: Migrate and seed the preview database
+        if: env.IS_PRODUCTION != 'true'
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.db_url }}
+        run: npm run db:seed
+
+      # Scoping the value to the PR's head branch keeps each preview pointed at
+      # its own database. Production reads DATABASE_URL from the Netlify site
+      # configuration instead.
+      - name: Point the preview at its own database
+        if: env.IS_PRODUCTION != 'true'
+        env:
+          DB_URL: ${{ steps.neon.outputs.db_url }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          npx --yes netlify-cli@27 env:set DATABASE_URL "$DB_URL" \
+            --context "branch:$HEAD_REF"
+
       - name: Apply database migrations
         if: env.IS_PRODUCTION == 'true'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |
-          if [ -z "$DATABASE_URL" ]; then
-            echo "::error::DATABASE_URL is required to deploy production."
-            exit 1
-          fi
-          npm run db:migrate
+        run: npm run db:migrate
 
       # `--build` runs the Netlify build pipeline, so the Next.js runtime plugin
       # and the scheduled function are wired up exactly as they are on Netlify.
+      # `--alias` gives each pull request a stable preview URL.
       - name: Deploy
         id: deploy
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           if [ "$IS_PRODUCTION" = 'true' ]; then
             npx --yes netlify-cli@27 deploy --build --prod --json > deploy.json
           else
-            npx --yes netlify-cli@27 deploy --build --json > deploy.json
+            npx --yes netlify-cli@27 deploy --build \
+              --context deploy-preview \
+              --alias "deploy-preview-$PR_NUMBER" --json > deploy.json
           fi
           url=$(jq -er '.deploy_url // .url' deploy.json)
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Deployed to $url" >> "$GITHUB_STEP_SUMMARY"
 
-      # Proves the deployment actually boots and can reach its database, which
-      # is the whole reason this job gates the merge.
+      # Proves the deployment boots *and* reached its database. Asserting
+      # demoMode is false is what stops a preview from passing while silently
+      # falling back to the in-process database — see the note in README about
+      # netlify/cli#6898.
       - name: Smoke test the deployment
         env:
           URL: ${{ steps.deploy.outputs.url }}
@@ -103,7 +146,9 @@ jobs:
 
           case "$body" in
             *'"demoMode":true'*)
-              echo "::warning::This deploy is running in demo mode — DATABASE_URL is" \
-                   "not set for its Netlify deploy context, so data is in-memory."
+              echo "::error::$URL is running in demo mode — it did not pick up its"
+              echo "::error::DATABASE_URL, so this deploy is not exercising a real database."
+              echo "::error::See the 'Preview deploys and environment variables' note in README.md."
+              exit 1
               ;;
           esac

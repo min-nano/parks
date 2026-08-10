@@ -137,26 +137,54 @@ npm run ingest          # 取り込みを手動実行
 
 - `.github/workflows/ci.yml` — lint・typecheck・カバレッジ付きテスト・ビルドを
   push と PR で実行します。テストは PGlite を使うのでデータベースサービスは不要です。
-- `.github/workflows/deploy.yml` — `main` への push で本番、PR で Deploy Preview を Netlify に
-  デプロイし、`/api/health` でスモークテストします。本番デプロイ時のみマイグレーションを
-  適用します（プレビューが本番DBを触ることはありません）。
+- `.github/workflows/deploy.yml` — `main` への push で本番、PR ごとに専用のプレビューサイトと
+  専用の DB ブランチを作ります。デプロイ後に `/api/health` でスモークテストします。
+- `.github/workflows/preview-cleanup.yml` — PR が閉じたら Neon ブランチと
+  ブランチスコープの環境変数を削除します。
 
   **プレビューデプロイはマージ条件です。** シークレットが未設定でデプロイできない場合は
   スキップせず失敗します。設定不足を緑で見逃さないためです。fork からの PR は
   シークレットを読めないため、このジョブは失敗します。
 
+### PR ごとのプレビューと DB ブランチ
+
+PR を開くと、次の流れで隔離された環境が用意されます。
+
+1. Neon に `pr-<PR番号>` ブランチを作成します（同名があれば再利用するので、追加の push でも
+   同じ DB を使い続けます）
+2. その DB ブランチにマイグレーションとデモデータを流します
+3. Netlify に **PR の head ブランチにスコープした** `DATABASE_URL` を設定します
+4. `deploy-preview-<PR番号>` エイリアスでプレビューサイトをデプロイします
+5. `/api/health` が `status:"ok"` かつ **`demoMode:false`** を返すことを検証します
+
+PR が閉じると Neon ブランチと環境変数を削除します。本番は Neon の主ブランチを使い、
+`DATABASE_URL` はリポジトリシークレット（マイグレーション用）と Netlify のサイト設定
+（実行時用）から読みます。
+
+> **プレビューと環境変数について（既知の制約）**
+>
+> `netlify deploy --alias` が作るのは draft deploy で、サイトの環境変数を読まない場合が
+> あることが報告されています（[netlify/cli#6898](https://github.com/netlify/cli/issues/6898)）。
+> これに当たるとプレビューが DB ブランチを見ずにデモモードで動いてしまうため、
+> スモークテストで `demoMode:true` を**失敗として扱います**。黙って通り抜けることはありません。
+>
+> もし実際に失敗する場合は、Netlify の Git 連携（リポジトリを Netlify に接続して
+> Deploy Preview を Netlify 自身にビルドさせる方式）に切り替えてください。その場合も
+> 手順 1〜3 はそのまま使えます。
+
 必要なリポジトリシークレット:
 
-| シークレット | 必須 | 用途 |
+| シークレット | 必須 | 取得元 |
 | --- | --- | --- |
 | `NETLIFY_AUTH_TOKEN` | 常に | Netlify → User settings → Applications → Personal access tokens |
 | `NETLIFY_SITE_ID` | 常に | Netlify → Site configuration → Site information → Site ID |
-| `DATABASE_URL` | 本番のみ | デプロイ前のマイグレーション。`main` への push で未設定なら失敗します |
+| `NEON_API_KEY` | プレビュー | Neon → Account settings → API keys |
+| `NEON_PROJECT_ID` | プレビュー | Neon → Project settings → General |
+| `DATABASE_URL` | 本番のみ | Neon 主ブランチの接続文字列。`main` への push で未設定なら失敗します |
 
 Netlify 側の環境変数（Site configuration → Environment variables）には、デプロイコンテキスト
-ごとに `DATABASE_URL` / Clerk / Google Maps / `CRON_SECRET` / `INGEST_SOURCES` を設定します。
-プレビューで `DATABASE_URL` が未設定の場合、デプロイ自体は成功しますがデモモード
-（プロセス内 Postgres）で動作している旨を警告として出します。
+ごとに `DATABASE_URL`（本番）/ Clerk / Google Maps / `CRON_SECRET` / `INGEST_SOURCES` を
+設定します。プレビュー用の `DATABASE_URL` はワークフローが自動で出し入れします。
 
 Dependabot は npm と GitHub Actions を **毎日** 監視します（`.github/dependabot.yml`）。
 関連パッケージはグループ化して、まとめて更新されるようにしています。

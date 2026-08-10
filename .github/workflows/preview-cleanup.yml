@@ -1,0 +1,48 @@
+name: Preview cleanup
+
+# Neon branches and branch-scoped environment variables outlive the pull request
+# unless something removes them, so tear both down when the PR ends.
+on:
+  pull_request:
+    types: [closed]
+
+concurrency:
+  group: preview-cleanup-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Remove the preview database and settings
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for credentials
+        id: credentials
+        env:
+          HAS_NEON: ${{ secrets.NEON_API_KEY != '' && secrets.NEON_PROJECT_ID != '' }}
+          HAS_NETLIFY: ${{ secrets.NETLIFY_AUTH_TOKEN != '' && secrets.NETLIFY_SITE_ID != '' }}
+        run: |
+          {
+            echo "neon=$HAS_NEON"
+            echo "netlify=$HAS_NETLIFY"
+          } >> "$GITHUB_OUTPUT"
+
+      # Unlike the deploy job this one does not gate merges, so an unconfigured
+      # repository should not be reported as a failure.
+      - name: Delete the Neon branch
+        if: steps.credentials.outputs.neon == 'true'
+        uses: neondatabase/delete-branch-action@v3
+        with:
+          project_id: ${{ secrets.NEON_PROJECT_ID }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+          branch: pr-${{ github.event.pull_request.number }}
+
+      - name: Remove the branch-scoped database URL
+        if: steps.credentials.outputs.netlify == 'true'
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          npx --yes netlify-cli@27 env:unset DATABASE_URL \
+            --context "branch:$HEAD_REF" || \
+            echo "::notice::No branch-scoped DATABASE_URL to remove."
