@@ -1,0 +1,84 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  deploy:
+    name: Deploy to Vercel
+    runs-on: ubuntu-latest
+    # A production push deploys; anything else gets a preview URL.
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Check for Vercel credentials
+        id: credentials
+        env:
+          HAS_TOKEN: ${{ secrets.VERCEL_TOKEN != '' }}
+          HAS_DATABASE: ${{ secrets.DATABASE_URL != '' }}
+        run: |
+          {
+            echo "configured=$HAS_TOKEN"
+            echo "database=$HAS_DATABASE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Explain the skip
+        if: steps.credentials.outputs.configured != 'true'
+        run: |
+          echo "::notice::Skipping deploy — set the VERCEL_TOKEN, VERCEL_ORG_ID and" \
+               "VERCEL_PROJECT_ID repository secrets to enable it."
+
+      - run: npm ci
+        if: steps.credentials.outputs.configured == 'true'
+
+      - name: Apply database migrations
+        if: steps.credentials.outputs.configured == 'true' && steps.credentials.outputs.database == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npm run db:migrate
+
+      - name: Pull Vercel environment
+        if: steps.credentials.outputs.configured == 'true'
+        run: >-
+          npx vercel pull --yes
+          --environment=${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
+          --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build
+        if: steps.credentials.outputs.configured == 'true'
+        run: >-
+          npx vercel build
+          ${{ github.ref == 'refs/heads/main' && '--prod' || '' }}
+          --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy
+        id: deploy
+        if: steps.credentials.outputs.configured == 'true'
+        run: |
+          url=$(npx vercel deploy --prebuilt \
+            ${{ github.ref == 'refs/heads/main' && '--prod' || '' }} \
+            --token=${{ secrets.VERCEL_TOKEN }})
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Deployed to $url" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke test the deployment
+        if: steps.credentials.outputs.configured == 'true'
+        run: curl --fail --silent --show-error "${{ steps.deploy.outputs.url }}/api/health"
