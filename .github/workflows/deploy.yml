@@ -139,6 +139,7 @@ jobs:
       - name: Smoke test the deployment
         env:
           URL: ${{ steps.deploy.outputs.url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           status='000'
           for attempt in 1 2 3 4 5; do
@@ -182,11 +183,21 @@ jobs:
               ;;
           esac
 
+          # Production must reach the real database; a preview cannot. Netlify
+          # does not deliver site environment variables to a CLI deploy, which
+          # was confirmed by setting DATABASE_URL in both the `branch:<head ref>`
+          # and `deploy-preview` scopes and getting demoMode back either way.
           case "$body" in
             *'"demoMode":true'*)
-              echo "::error::$URL is running in demo mode — it did not pick up its"
-              echo "::error::DATABASE_URL, so this deploy is not exercising a real database."
-              echo "::error::See the 'Preview deploys and environment variables' note in README.md."
-              exit 1
+              if [ "$IS_PRODUCTION" = 'true' ]; then
+                echo "::error::Production is running in demo mode — it did not pick up"
+                echo "::error::DATABASE_URL, so it is not using the real database."
+                echo "::error::Check DATABASE_URL in the Netlify production context."
+                exit 1
+              fi
+              echo "::warning::The preview is up but running in demo mode, so it is not"
+              echo "::warning::reading the pr-$PR_NUMBER Neon branch. Connecting the"
+              echo "::warning::repository to Netlify's git integration fixes this — see the"
+              echo "::warning::'PR ごとのプレビューと DB ブランチ' section of README.md."
               ;;
           esac
