@@ -85,14 +85,17 @@ jobs:
           DATABASE_URL: ${{ steps.neon.outputs.db_url }}
         run: npm run db:seed
 
-      # Points the preview at its own database. Two scopes are written on
-      # purpose:
+      # Points the preview at its own database.
       #
-      #   branch:<head ref>  the precise one, used when Netlify builds the PR
-      #                      itself through its git integration.
-      #   deploy-preview     the one a CLI deploy can actually resolve: a manual
-      #                      deploy carries no git branch, so the branch-scoped
-      #                      value never matches it.
+      # `--scope` decides which parts of Netlify may read the value. The Next
+      # server handler runs as a Netlify Function, so `functions` and `runtime`
+      # are the scopes that matter at request time; `builds` keeps it available
+      # to the build itself.
+      #
+      # Both contexts are written: `branch:<head ref>` is what Netlify's git
+      # integration resolves, and `deploy-preview` is what a manual CLI deploy
+      # can match, since such a deploy carries no git branch. `env:list` prints
+      # the resulting configuration so a failure is diagnosable from the log.
       #
       # The deploy-preview value is shared, so two pull requests deploying at the
       # same moment can race for it. Netlify's git integration removes that.
@@ -102,10 +105,10 @@ jobs:
           DB_URL: ${{ steps.neon.outputs.db_url }}
           HEAD_REF: ${{ github.head_ref }}
         run: |
-          npx --yes netlify-cli@27 env:set DATABASE_URL "$DB_URL" \
-            --context "branch:$HEAD_REF"
-          npx --yes netlify-cli@27 env:set DATABASE_URL "$DB_URL" \
-            --context deploy-preview
+          npx --yes netlify-cli@27 env:set DATABASE_URL "$DB_URL" --force \
+            --context "branch:$HEAD_REF" deploy-preview \
+            --scope builds functions runtime
+          npx --yes netlify-cli@27 env:list --context deploy-preview
 
       - name: Apply database migrations
         if: env.IS_PRODUCTION == 'true'
@@ -183,10 +186,10 @@ jobs:
               ;;
           esac
 
-          # Production must reach the real database; a preview cannot. Netlify
-          # does not deliver site environment variables to a CLI deploy, which
-          # was confirmed by setting DATABASE_URL in both the `branch:<head ref>`
-          # and `deploy-preview` scopes and getting demoMode back either way.
+          # Production must reach the real database. A preview only warns for
+          # now: whether a CLI deploy can read the site's environment variables
+          # depends on the value's scope, and the run above is what tells us.
+          # Once a preview reports demoMode:false this becomes an error too.
           case "$body" in
             *'"demoMode":true'*)
               if [ "$IS_PRODUCTION" = 'true' ]; then

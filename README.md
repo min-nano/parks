@@ -164,31 +164,28 @@ PR が閉じると Neon ブランチと環境変数を削除します。本番�
 `DATABASE_URL` はリポジトリシークレット（マイグレーション用）と Netlify のサイト設定
 （実行時用）から読みます。
 
-> **現状の制約: プレビューは DB ブランチを参照しません（実測済み）**
+> **環境変数のスコープについて**
 >
-> Netlify は **CLI の手動デプロイにサイトの環境変数を実行時に渡しません**。
-> `DATABASE_URL` を `branch:<head ref>` と `deploy-preview` の両方のスコープに設定して
-> 実機で試しましたが、いずれもプレビューは `{"status":"ok","demoMode":true}` を返し、
-> DB ブランチを見ませんでした（[netlify/cli#6898](https://github.com/netlify/cli/issues/6898)）。
-> CLI 側の設定でこれ以上できることはありません。
+> `env:set` の `--scope` は、その値を Netlify のどの部分が読めるかを決めます
+> （`builds` / `functions` / `runtime` / `post-processing`）。Next.js の
+> サーバーハンドラは Netlify Function として動くため、リクエスト時に効くのは
+> `functions` と `runtime` です。
 >
-> したがって現状は次のようになっています。
+> `--context` だけを指定して `--scope` を省いた状態では、プレビューは
+> `{"status":"ok","demoMode":true}` を返し DB ブランチを見ませんでした
+> （`branch:<head ref>` と `deploy-preview` の両方で確認）。そのため
+> スコープを明示しています。あわせて `env:list` の出力をログに残し、
+> 想定どおりの設定になっているか確認できるようにしています。
 >
-> | | 状態 |
-> | --- | --- |
-> | PR ごとのプレビューサイト作成 | 動作 |
-> | PR ごとの Neon ブランチ作成 | 動作 |
-> | そのブランチへのマイグレーション + シード | 動作（マイグレーションが実 Neon に適用できることの検証になります） |
-> | プレビューサイトがそのブランチを参照 | **未接続**（デモモードで動作。CI は警告を出します） |
+> それでもプレビューがデモモードのままになる場合は、Netlify の Git 連携
+> （リポジトリを Netlify に接続して Deploy Preview を Netlify 自身にビルドさせる方式）
+> に切り替えてください。git ブランチが紐づくので `branch:<head ref>` が確実に解決されます。
+> その場合、上記の手順 1〜3 はそのまま流用でき、`deploy.yml` から PR のデプロイ実行だけを
+> 外して、マージ条件を Netlify の commit status に置き換える形になります。
 >
-> **接続するには Netlify の Git 連携に切り替えてください。** リポジトリを Netlify に接続し、
-> Deploy Preview を Netlify 自身にビルドさせると git ブランチが紐づくため、
-> `branch:<head ref>` スコープが正しく解決されます。上記の手順 1〜3 はそのまま流用でき、
-> `deploy.yml` から PR のデプロイ実行だけを外して、マージ条件を Netlify の
-> commit status に置き換える形になります。
->
-> 本番デプロイでは `demoMode:true` を**失敗として扱います**。本番が実 DB に到達しないまま
-> 緑になることはありません。
+> **本番デプロイでは `demoMode:true` を失敗として扱います。** 本番が実 DB に到達しないまま
+> 緑になることはありません。プレビューは現状 warning に留めていますが、
+> `demoMode:false` を確認できたらこちらも失敗扱いに戻します。
 
 > **プレビューへのアクセス制御は無効にしてください**
 >
