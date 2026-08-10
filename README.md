@@ -173,13 +173,16 @@ PR が閉じると Neon ブランチと環境変数を削除します。本番�
 > Deploy Preview を Netlify 自身にビルドさせる方式）に切り替えてください。その場合も
 > 手順 1〜3 はそのまま使えます。
 
-> **プレビューへのアクセス制御について**
+> **プレビューへのアクセス制御は無効にしてください**
 >
-> Netlify 側で訪問者のアクセス制御（Site configuration → Access & security → Visitor
+> Netlify の訪問者アクセス制御（Site configuration → Access & security → Visitor
 > access）が有効だと、プレビュー URL が 401 を返しスモークテストが通りません。
-> Deploy Preview については無効にするか、`NETLIFY_PREVIEW_BASIC_AUTH` シークレットに
-> `user:password` を設定してください。401/403 のときはレスポンスヘッダも出力するので、
-> どの認証方式かはログで判別できます。
+> 実際の応答は `app.netlify.com/edge-access` へのリダイレクトで、**Netlify アカウントの
+> ログインを求める対話的なフロー**です（`www-authenticate` は返りません）。したがって
+> CI から送れるヘッダやトークンは存在せず、Deploy Preview については
+> アクセス制御を無効にする必要があります。
+>
+> 401/403 のときはレスポンスヘッダも出力するので、方式が変わってもログから判別できます。
 
 必要なリポジトリシークレット:
 
@@ -190,7 +193,6 @@ PR が閉じると Neon ブランチと環境変数を削除します。本番�
 | `NEON_API_KEY` | プレビュー | Neon → Account settings → API keys |
 | `NEON_PROJECT_ID` | プレビュー | Neon → Project settings → General |
 | `DATABASE_URL` | 本番のみ | Neon 主ブランチの接続文字列。`main` への push で未設定なら失敗します |
-| `NETLIFY_PREVIEW_BASIC_AUTH` | 任意 | Netlify のアクセス制御を有効にしたままにする場合に `user:password` 形式で指定します |
 
 Netlify 側の環境変数（Site configuration → Environment variables）には、デプロイコンテキスト
 ごとに `DATABASE_URL`（本番）/ Clerk / Google Maps / `CRON_SECRET` / `INGEST_SOURCES` を
