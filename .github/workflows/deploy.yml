@@ -12,20 +12,17 @@ concurrency:
 
 env:
   NODE_VERSION: '22'
-  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
 jobs:
   deploy:
-    name: Deploy to Vercel
+    name: Deploy to Netlify
     runs-on: ubuntu-latest
-    # A production push deploys; anything else gets a preview URL.
+    # A production push deploys; anything else gets a deploy preview URL.
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
     env:
       IS_PRODUCTION: ${{ github.ref == 'refs/heads/main' }}
-      TARGET: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
-      PROD_FLAG: ${{ github.ref == 'refs/heads/main' && '--prod' || '' }}
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+      NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
     steps:
       - uses: actions/checkout@v5
 
@@ -37,12 +34,11 @@ jobs:
       # A green preview deploy is a merge requirement, so missing configuration
       # has to fail loudly. Skipping would report success without having
       # verified anything.
-      - name: Require Vercel credentials
+      - name: Require Netlify credentials
         run: |
           missing=()
-          [ -n "$VERCEL_TOKEN" ] || missing+=(VERCEL_TOKEN)
-          [ -n "$VERCEL_ORG_ID" ] || missing+=(VERCEL_ORG_ID)
-          [ -n "$VERCEL_PROJECT_ID" ] || missing+=(VERCEL_PROJECT_ID)
+          [ -n "$NETLIFY_AUTH_TOKEN" ] || missing+=(NETLIFY_AUTH_TOKEN)
+          [ -n "$NETLIFY_SITE_ID" ] || missing+=(NETLIFY_SITE_ID)
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "::error::Missing repository secrets: ${missing[*]}."
             echo "::error::Add them under Settings > Secrets and variables > Actions."
@@ -53,8 +49,8 @@ jobs:
       - run: npm ci
 
       # Only production touches the real database. A preview must never migrate
-      # it — previews run against whatever DATABASE_URL the Vercel preview
-      # environment provides (or in demo mode when it has none).
+      # it — previews run against whatever DATABASE_URL the Netlify deploy
+      # context provides (or in demo mode when it has none).
       - name: Apply database migrations
         if: env.IS_PRODUCTION == 'true'
         env:
@@ -66,16 +62,17 @@ jobs:
           fi
           npm run db:migrate
 
-      - name: Pull Vercel environment
-        run: npx vercel pull --yes --environment="$TARGET" --token="$VERCEL_TOKEN"
-
-      - name: Build
-        run: npx vercel build $PROD_FLAG --token="$VERCEL_TOKEN"
-
+      # `--build` runs the Netlify build pipeline, so the Next.js runtime plugin
+      # and the scheduled function are wired up exactly as they are on Netlify.
       - name: Deploy
         id: deploy
         run: |
-          url=$(npx vercel deploy --prebuilt $PROD_FLAG --token="$VERCEL_TOKEN")
+          if [ "$IS_PRODUCTION" = 'true' ]; then
+            npx --yes netlify-cli@27 deploy --build --prod --json > deploy.json
+          else
+            npx --yes netlify-cli@27 deploy --build --json > deploy.json
+          fi
+          url=$(jq -er '.deploy_url // .url' deploy.json)
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Deployed to $url" >> "$GITHUB_STEP_SUMMARY"
 
@@ -84,18 +81,11 @@ jobs:
       - name: Smoke test the deployment
         env:
           URL: ${{ steps.deploy.outputs.url }}
-          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
-          args=(--silent --show-error --location --fail --max-time 20)
-          # Preview URLs are behind Vercel Deployment Protection unless a bypass
-          # secret is configured; without it the health check would 401.
-          if [ -n "$BYPASS" ]; then
-            args+=(--header "x-vercel-protection-bypass: $BYPASS")
-          fi
-
           body=''
           for attempt in 1 2 3 4 5; do
-            if body=$(curl "${args[@]}" "$URL/api/health"); then
+            if body=$(curl --silent --show-error --location --fail --max-time 20 \
+              "$URL/api/health"); then
               break
             fi
             echo "Attempt $attempt failed; the deployment may still be starting."
@@ -111,19 +101,9 @@ jobs:
               ;;
           esac
 
-      - name: Warn about demo mode
-        env:
-          BODY_URL: ${{ steps.deploy.outputs.url }}
-          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-        run: |
-          args=(--silent --location --fail --max-time 20)
-          if [ -n "$BYPASS" ]; then
-            args+=(--header "x-vercel-protection-bypass: $BYPASS")
-          fi
-          body=$(curl "${args[@]}" "$BODY_URL/api/health" || true)
           case "$body" in
             *'"demoMode":true'*)
-              echo "::warning::$TARGET is running in demo mode — DATABASE_URL is" \
-                   "not set in the Vercel $TARGET environment, so data is in-memory."
+              echo "::warning::This deploy is running in demo mode — DATABASE_URL is" \
+                   "not set for its Netlify deploy context, so data is in-memory."
               ;;
           esac

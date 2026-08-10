@@ -4,7 +4,7 @@ out/
 build/
 coverage/
 *.tsbuildinfo
-.vercel/
+.netlify/
 .env
 .env.local
 .env*.local

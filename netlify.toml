@@ -1,0 +1,17 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+# Runs Next.js (App Router, server components and route handlers) on Netlify.
+# Netlify installs the plugin during the build; it is not an npm dependency.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+[functions]
+  node_bundler = "esbuild"
+
+# The ingest schedule lives with the function itself, in
+# netlify/functions/ingest.ts, so there is one source of truth for it.
+
+[build.environment]
+  NODE_VERSION = "22"

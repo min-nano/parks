@@ -26,15 +26,16 @@ npm run dev      # http://localhost:3000
 | 空き情報 | 公式データとユーザー報告を時間減衰つきで統合 (`src/domain/availability.ts`) |
 | 自車でフィルタ | 全長・全幅・全高・重量・タイヤ幅で絞り込み。未公表の制限は「要確認」と明示 |
 | ユーザー報告 | Clerk でサインインしたユーザーが空車状況を投稿 |
-| データ収集 | 公式サイト向けアダプタ + 正規化パイプライン (`src/ingest/`)、Vercel Cron で定期実行 |
+| データ収集 | 公式サイト向けアダプタ + 正規化パイプライン (`src/ingest/`)、Netlify Scheduled Function で定期実行 |
 
 ## 構成
 
-提案どおり Vercel + React + Clerk + Google Maps を採用し、以下を追加しています。
+**Netlify + Neon** + React + Clerk + Google Maps の構成です。
 
-- **Next.js (App Router)** — Vercel 上で React を動かす標準構成。API Routes を同じリポジトリに
-  置けるので、データ収集エンドポイントとフロントを一体で扱えます。
-- **Neon Postgres + Drizzle ORM** — Vercel から使えるサーバーレス Postgres。位置検索は
+- **Next.js (App Router)** — Netlify の Next.js Runtime (`@netlify/plugin-nextjs`) で動かします。
+  API Routes を同じリポジトリに置けるので、データ収集エンドポイントとフロントを一体で扱えます。
+- **Neon Postgres + Drizzle ORM** — サーバーレス Postgres。HTTP ドライバなので接続プールを
+  持たない関数実行環境と相性が良く、Netlify Functions からそのまま使えます。位置検索は
   バウンディングボックスで絞ってから正確な距離を計算します（PostGIS は MVP では不要）。
 - **PGlite** — 開発・テスト・デモ用のプロセス内 Postgres。CI にデータベースサービスが要らず、
   本番と同じ SQL をそのまま検証できます。
@@ -49,7 +50,12 @@ src/
   components/  地図・検索結果・詳細・報告フォーム
   hooks/       検索と詳細のデータ取得
   lib/         クエリ解析・整形・APIクライアント
+netlify/
+  functions/   Scheduled Function（取り込みの定期実行トリガー）
 ```
+
+> `netlify/functions/` に置いたファイルは Netlify がすべてデプロイ対象の関数として
+> パッケージします。テストは公開エンドポイントにならないよう `netlify/` 直下に置いています。
 
 ### データモデルの要点
 
@@ -91,8 +97,12 @@ src/
 吸収します。HTML しか公開していない事業者は `IngestAdapter` を実装し、同じ生レコード形式を
 返すだけで組み込めます（`src/ingest/adapters/http-json.ts` が実装例）。
 
-`vercel.json` の cron で10分ごとに `/api/cron/ingest` を叩きます。`CRON_SECRET` が未設定の間は
-エンドポイントは 503 を返して無効のままです。
+`netlify/functions/ingest.ts` が10分ごとに `/api/cron/ingest` を叩きます。`CRON_SECRET` が
+未設定の間はエンドポイントは 503 を返して無効のままです。
+
+> **既知の制約:** ingest は Next.js のルートで実行されるため、Netlify Functions の実行時間
+> 上限（無料プランで10秒）を受けます。フィードが増えて足りなくなったら、取り込み本体を
+> Netlify の Background Function に移すか、フィード単位に分割してください。
 
 > 収集対象を追加する際は、各サイトの利用規約と robots.txt を確認してください。
 
@@ -112,7 +122,7 @@ npm run ingest          # 取り込みを手動実行
 
 ## テスト
 
-410 件のテストで、ステートメント・ブランチ・関数・行すべて 100% です。しきい値は
+420 件のテストで、ステートメント・ブランチ・関数・行すべて 100% です。しきい値は
 `vitest.config.ts` に設定してあり、CI で強制されます。
 
 - ドメインロジック（料金・空き状況・適合判定・距離）は純粋関数として単体テスト
@@ -120,13 +130,14 @@ npm run ingest          # 取り込みを手動実行
 - コンポーネントは Testing Library。Google Maps と Clerk はモック
 
 カバレッジ対象外はルートレイアウト、Clerk のミドルウェア、CLI エントリポイントだけです
-（いずれも分岐を持たないフレームワークの接続部分）。
+（いずれも分岐を持たないフレームワークの接続部分）。Netlify の Scheduled Function は
+対象に含めています。
 
 ## CI / デプロイ
 
 - `.github/workflows/ci.yml` — lint・typecheck・カバレッジ付きテスト・ビルドを
   push と PR で実行します。テストは PGlite を使うのでデータベースサービスは不要です。
-- `.github/workflows/deploy.yml` — `main` への push で本番、PR でプレビューを Vercel に
+- `.github/workflows/deploy.yml` — `main` への push で本番、PR で Deploy Preview を Netlify に
   デプロイし、`/api/health` でスモークテストします。本番デプロイ時のみマイグレーションを
   適用します（プレビューが本番DBを触ることはありません）。
 
@@ -138,21 +149,28 @@ npm run ingest          # 取り込みを手動実行
 
 | シークレット | 必須 | 用途 |
 | --- | --- | --- |
-| `VERCEL_TOKEN` | 常に | Vercel CLI の認証。未設定ならジョブは失敗します |
-| `VERCEL_ORG_ID` | 常に | 同上 |
-| `VERCEL_PROJECT_ID` | 常に | 同上 |
+| `NETLIFY_AUTH_TOKEN` | 常に | Netlify → User settings → Applications → Personal access tokens |
+| `NETLIFY_SITE_ID` | 常に | Netlify → Site configuration → Site information → Site ID |
 | `DATABASE_URL` | 本番のみ | デプロイ前のマイグレーション。`main` への push で未設定なら失敗します |
-| `VERCEL_AUTOMATION_BYPASS_SECRET` | 推奨 | Deployment Protection 有効時、プレビューのスモークテストが 401 にならないようにします |
 
-プレビュー環境で `DATABASE_URL` が未設定の場合はデプロイ自体は成功しますが、デモモード
+Netlify 側の環境変数（Site configuration → Environment variables）には、デプロイコンテキスト
+ごとに `DATABASE_URL` / Clerk / Google Maps / `CRON_SECRET` / `INGEST_SOURCES` を設定します。
+プレビューで `DATABASE_URL` が未設定の場合、デプロイ自体は成功しますがデモモード
 （プロセス内 Postgres）で動作している旨を警告として出します。
 
 Dependabot は npm と GitHub Actions を **毎日** 監視します（`.github/dependabot.yml`）。
 関連パッケージはグループ化して、まとめて更新されるようにしています。
 
+### Netlify 側の注意点
+
+- `@netlify/plugin-nextjs`（Next.js Runtime v5）は netlify.toml で宣言してあり、Netlify が
+  ビルド時に導入します。npm の依存には入れません。
+- `src/proxy.ts`（Clerk のミドルウェア）は Netlify Edge Function（Deno）としてデプロイされます。
+- 無料プランのビルド時間・関数実行時間の上限に注意してください（下記の既知の制約も参照）。
+
 ## 本番セットアップ
 
-1. **データベース** — Vercel Postgres / Neon でプロジェクトを作成し、`DATABASE_URL` を設定して
+1. **データベース** — Neon でプロジェクトを作成し、`DATABASE_URL` を設定して
    `npm run db:migrate` を実行します。
 2. **Clerk** — アプリケーションを作成し、`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` と
    `CLERK_SECRET_KEY` を設定します。誰でもサインアップできる設定にしてください。

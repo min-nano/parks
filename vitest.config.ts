@@ -14,9 +14,9 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'json-summary'],
-      include: ['src/**/*.{ts,tsx}'],
+      include: ['src/**/*.{ts,tsx}', 'netlify/**/*.ts'],
       exclude: [
-        'src/**/*.test.{ts,tsx}',
+        '**/*.test.{ts,tsx}',
         'src/test/**',
         // Framework glue with no branching of our own: the root layout (it
         // renders <html>/<body>, which cannot be mounted in jsdom), the Clerk

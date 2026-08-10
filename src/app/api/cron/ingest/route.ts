@@ -4,14 +4,13 @@ import { runIngest } from '@/ingest/pipeline';
 import { jsonResponse, unauthorized } from '@/server/responses';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
 
 /**
- * Pulls every configured operator feed. Wired to a Vercel cron in `vercel.json`.
+ * Pulls every configured operator feed. Driven by the Netlify scheduled
+ * function in `netlify/functions/ingest.ts`, which sends the bearer token.
  *
  * The endpoint stays disabled until `CRON_SECRET` is set, so an unconfigured
- * deployment cannot be driven by anyone who finds the URL. Vercel sends the
- * secret as a bearer token automatically.
+ * deployment cannot be driven by anyone who finds the URL.
  */
 export async function GET(request: Request): Promise<Response> {
   const secret = process.env.CRON_SECRET;
