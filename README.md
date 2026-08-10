@@ -127,11 +127,25 @@ npm run ingest          # 取り込みを手動実行
 - `.github/workflows/ci.yml` — lint・typecheck・カバレッジ付きテスト・ビルドを
   push と PR で実行します。テストは PGlite を使うのでデータベースサービスは不要です。
 - `.github/workflows/deploy.yml` — `main` への push で本番、PR でプレビューを Vercel に
-  デプロイし、`/api/health` でスモークテストします。`DATABASE_URL` があればデプロイ前に
-  マイグレーションを適用します。必要なシークレットが無い場合は失敗せずスキップします。
+  デプロイし、`/api/health` でスモークテストします。本番デプロイ時のみマイグレーションを
+  適用します（プレビューが本番DBを触ることはありません）。
 
-必要なリポジトリシークレット: `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`,
-（任意）`DATABASE_URL`。
+  **プレビューデプロイはマージ条件です。** シークレットが未設定でデプロイできない場合は
+  スキップせず失敗します。設定不足を緑で見逃さないためです。fork からの PR は
+  シークレットを読めないため、このジョブは失敗します。
+
+必要なリポジトリシークレット:
+
+| シークレット | 必須 | 用途 |
+| --- | --- | --- |
+| `VERCEL_TOKEN` | 常に | Vercel CLI の認証。未設定ならジョブは失敗します |
+| `VERCEL_ORG_ID` | 常に | 同上 |
+| `VERCEL_PROJECT_ID` | 常に | 同上 |
+| `DATABASE_URL` | 本番のみ | デプロイ前のマイグレーション。`main` への push で未設定なら失敗します |
+| `VERCEL_AUTOMATION_BYPASS_SECRET` | 推奨 | Deployment Protection 有効時、プレビューのスモークテストが 401 にならないようにします |
+
+プレビュー環境で `DATABASE_URL` が未設定の場合はデプロイ自体は成功しますが、デモモード
+（プロセス内 Postgres）で動作している旨を警告として出します。
 
 Dependabot は npm と GitHub Actions を **毎日** 監視します（`.github/dependabot.yml`）。
 関連パッケージはグループ化して、まとめて更新されるようにしています。

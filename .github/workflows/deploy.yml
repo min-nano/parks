@@ -21,6 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     # A production push deploys; anything else gets a preview URL.
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
+    env:
+      IS_PRODUCTION: ${{ github.ref == 'refs/heads/main' }}
+      TARGET: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
+      PROD_FLAG: ${{ github.ref == 'refs/heads/main' && '--prod' || '' }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
     steps:
       - uses: actions/checkout@v5
 
@@ -29,56 +34,96 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Check for Vercel credentials
-        id: credentials
-        env:
-          HAS_TOKEN: ${{ secrets.VERCEL_TOKEN != '' }}
-          HAS_DATABASE: ${{ secrets.DATABASE_URL != '' }}
+      # A green preview deploy is a merge requirement, so missing configuration
+      # has to fail loudly. Skipping would report success without having
+      # verified anything.
+      - name: Require Vercel credentials
         run: |
-          {
-            echo "configured=$HAS_TOKEN"
-            echo "database=$HAS_DATABASE"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Explain the skip
-        if: steps.credentials.outputs.configured != 'true'
-        run: |
-          echo "::notice::Skipping deploy — set the VERCEL_TOKEN, VERCEL_ORG_ID and" \
-               "VERCEL_PROJECT_ID repository secrets to enable it."
+          missing=()
+          [ -n "$VERCEL_TOKEN" ] || missing+=(VERCEL_TOKEN)
+          [ -n "$VERCEL_ORG_ID" ] || missing+=(VERCEL_ORG_ID)
+          [ -n "$VERCEL_PROJECT_ID" ] || missing+=(VERCEL_PROJECT_ID)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing repository secrets: ${missing[*]}."
+            echo "::error::Add them under Settings > Secrets and variables > Actions."
+            echo "::error::Note that pull requests from forks cannot read secrets."
+            exit 1
+          fi
 
       - run: npm ci
-        if: steps.credentials.outputs.configured == 'true'
 
+      # Only production touches the real database. A preview must never migrate
+      # it — previews run against whatever DATABASE_URL the Vercel preview
+      # environment provides (or in demo mode when it has none).
       - name: Apply database migrations
-        if: steps.credentials.outputs.configured == 'true' && steps.credentials.outputs.database == 'true'
+        if: env.IS_PRODUCTION == 'true'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: npm run db:migrate
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL is required to deploy production."
+            exit 1
+          fi
+          npm run db:migrate
 
       - name: Pull Vercel environment
-        if: steps.credentials.outputs.configured == 'true'
-        run: >-
-          npx vercel pull --yes
-          --environment=${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
-          --token=${{ secrets.VERCEL_TOKEN }}
+        run: npx vercel pull --yes --environment="$TARGET" --token="$VERCEL_TOKEN"
 
       - name: Build
-        if: steps.credentials.outputs.configured == 'true'
-        run: >-
-          npx vercel build
-          ${{ github.ref == 'refs/heads/main' && '--prod' || '' }}
-          --token=${{ secrets.VERCEL_TOKEN }}
+        run: npx vercel build $PROD_FLAG --token="$VERCEL_TOKEN"
 
       - name: Deploy
         id: deploy
-        if: steps.credentials.outputs.configured == 'true'
         run: |
-          url=$(npx vercel deploy --prebuilt \
-            ${{ github.ref == 'refs/heads/main' && '--prod' || '' }} \
-            --token=${{ secrets.VERCEL_TOKEN }})
+          url=$(npx vercel deploy --prebuilt $PROD_FLAG --token="$VERCEL_TOKEN")
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Deployed to $url" >> "$GITHUB_STEP_SUMMARY"
 
+      # Proves the deployment actually boots and can reach its database, which
+      # is the whole reason this job gates the merge.
       - name: Smoke test the deployment
-        if: steps.credentials.outputs.configured == 'true'
-        run: curl --fail --silent --show-error "${{ steps.deploy.outputs.url }}/api/health"
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          args=(--silent --show-error --location --fail --max-time 20)
+          # Preview URLs are behind Vercel Deployment Protection unless a bypass
+          # secret is configured; without it the health check would 401.
+          if [ -n "$BYPASS" ]; then
+            args+=(--header "x-vercel-protection-bypass: $BYPASS")
+          fi
+
+          body=''
+          for attempt in 1 2 3 4 5; do
+            if body=$(curl "${args[@]}" "$URL/api/health"); then
+              break
+            fi
+            echo "Attempt $attempt failed; the deployment may still be starting."
+            sleep 10
+          done
+
+          echo "$body"
+          case "$body" in
+            *'"status":"ok"'*) ;;
+            *)
+              echo "::error::Health check failed for $URL"
+              exit 1
+              ;;
+          esac
+
+      - name: Warn about demo mode
+        env:
+          BODY_URL: ${{ steps.deploy.outputs.url }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          args=(--silent --location --fail --max-time 20)
+          if [ -n "$BYPASS" ]; then
+            args+=(--header "x-vercel-protection-bypass: $BYPASS")
+          fi
+          body=$(curl "${args[@]}" "$BODY_URL/api/health" || true)
+          case "$body" in
+            *'"demoMode":true'*)
+              echo "::warning::$TARGET is running in demo mode — DATABASE_URL is" \
+                   "not set in the Vercel $TARGET environment, so data is in-memory."
+              ;;
+          esac
