@@ -1,0 +1,49 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: daily
+      time: '04:00'
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+    groups:
+      # Framework and toolchain packages must move together or the tree breaks.
+      next:
+        patterns:
+          - 'next'
+          - 'eslint-config-next'
+          - '@next/*'
+      react:
+        patterns:
+          - 'react'
+          - 'react-dom'
+          - '@types/react'
+          - '@types/react-dom'
+      testing:
+        patterns:
+          - 'vitest'
+          - '@vitest/*'
+          - '@testing-library/*'
+          - 'jsdom'
+      linting:
+        patterns:
+          - 'eslint'
+          - '@eslint/*'
+          - 'typescript-eslint'
+      drizzle:
+        patterns:
+          - 'drizzle-orm'
+          - 'drizzle-kit'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+      time: '04:00'
+      timezone: Asia/Tokyo
+    labels:
+      - dependencies
+      - github-actions
