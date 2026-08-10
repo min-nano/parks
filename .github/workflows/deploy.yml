@@ -85,9 +85,17 @@ jobs:
           DATABASE_URL: ${{ steps.neon.outputs.db_url }}
         run: npm run db:seed
 
-      # Scoping the value to the PR's head branch keeps each preview pointed at
-      # its own database. Production reads DATABASE_URL from the Netlify site
-      # configuration instead.
+      # Points the preview at its own database. Two scopes are written on
+      # purpose:
+      #
+      #   branch:<head ref>  the precise one, used when Netlify builds the PR
+      #                      itself through its git integration.
+      #   deploy-preview     the one a CLI deploy can actually resolve: a manual
+      #                      deploy carries no git branch, so the branch-scoped
+      #                      value never matches it.
+      #
+      # The deploy-preview value is shared, so two pull requests deploying at the
+      # same moment can race for it. Netlify's git integration removes that.
       - name: Point the preview at its own database
         if: env.IS_PRODUCTION != 'true'
         env:
@@ -96,6 +104,8 @@ jobs:
         run: |
           npx --yes netlify-cli@27 env:set DATABASE_URL "$DB_URL" \
             --context "branch:$HEAD_REF"
+          npx --yes netlify-cli@27 env:set DATABASE_URL "$DB_URL" \
+            --context deploy-preview
 
       - name: Apply database migrations
         if: env.IS_PRODUCTION == 'true'

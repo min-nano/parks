@@ -154,7 +154,8 @@ PR を開くと、次の流れで隔離された環境が用意されます。
 1. Neon に `pr-<PR番号>` ブランチを作成します（同名があれば再利用するので、追加の push でも
    同じ DB を使い続けます）
 2. その DB ブランチにマイグレーションとデモデータを流します
-3. Netlify に **PR の head ブランチにスコープした** `DATABASE_URL` を設定します
+3. Netlify に `DATABASE_URL` を設定します（`branch:<head ref>` と `deploy-preview` の
+   両方のスコープ。理由は下記）
 4. `deploy-preview-<PR番号>` エイリアスでプレビューサイトをデプロイします
 5. `/api/health` が `status:"ok"` かつ **`demoMode:false`** を返すことを検証します
 
@@ -162,16 +163,21 @@ PR が閉じると Neon ブランチと環境変数を削除します。本番�
 `DATABASE_URL` はリポジトリシークレット（マイグレーション用）と Netlify のサイト設定
 （実行時用）から読みます。
 
-> **プレビューと環境変数について（既知の制約）**
+> **なぜ環境変数を2つのスコープに書くのか（実測済み）**
 >
-> `netlify deploy --alias` が作るのは draft deploy で、サイトの環境変数を読まない場合が
-> あることが報告されています（[netlify/cli#6898](https://github.com/netlify/cli/issues/6898)）。
-> これに当たるとプレビューが DB ブランチを見ずにデモモードで動いてしまうため、
-> スモークテストで `demoMode:true` を**失敗として扱います**。黙って通り抜けることはありません。
+> CLI の手動デプロイには git ブランチが紐づかないため、`branch:<head ref>` スコープの値は
+> 解決されません。実際に `branch:` だけを設定して試したところ、プレビューは
+> `{"status":"ok","demoMode":true}` を返し、DB ブランチを見ていませんでした
+> （[netlify/cli#6898](https://github.com/netlify/cli/issues/6898) と同じ現象）。
+> そのため `deploy-preview` スコープにも書いています。
 >
-> もし実際に失敗する場合は、Netlify の Git 連携（リポジトリを Netlify に接続して
-> Deploy Preview を Netlify 自身にビルドさせる方式）に切り替えてください。その場合も
-> 手順 1〜3 はそのまま使えます。
+> `deploy-preview` の値はすべての PR で共有されるため、**複数の PR が同時にデプロイすると
+> 取り合いになります**。同時進行が増えたら、Netlify の Git 連携（リポジトリを Netlify に
+> 接続して Deploy Preview を Netlify 自身にビルドさせる方式）に切り替えてください。
+> その場合は `branch:` スコープが正しく解決されるので、この競合はなくなります。
+>
+> どちらの場合も、スモークテストが `demoMode:true` を**失敗として扱う**ので、
+> プレビューが DB ブランチを見ていないまま緑になることはありません。
 
 > **プレビューへのアクセス制御は無効にしてください**
 >
