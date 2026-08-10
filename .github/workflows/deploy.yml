@@ -22,7 +22,7 @@ jobs:
     # A production push deploys; anything else gets a preview URL.
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:
