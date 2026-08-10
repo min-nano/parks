@@ -68,6 +68,11 @@ jobs:
 
       - run: npm ci
 
+      # Installed once: each `npx netlify-cli` invocation otherwise spends ~40s
+      # resolving the package before it does any work.
+      - name: Install the Netlify CLI
+        run: npm install --global netlify-cli@27
+
       # One Neon branch per pull request, named after it. The action is
       # idempotent: a later push to the same PR reuses the existing branch.
       - name: Create the Neon branch for this pull request
@@ -105,10 +110,18 @@ jobs:
           DB_URL: ${{ steps.neon.outputs.db_url }}
           HEAD_REF: ${{ github.head_ref }}
         run: |
-          npx --yes netlify-cli@27 env:set DATABASE_URL "$DB_URL" --force \
-            --context "branch:$HEAD_REF" deploy-preview \
+          # The value first, which also creates the variable on the first run.
+          netlify env:set DATABASE_URL "$DB_URL" --force \
+            --context "branch:$HEAD_REF" deploy-preview
+
+          # Then the scope, as a separate call. Netlify rejects setting context
+          # and scope together once the variable exists:
+          #   "Setting the context and scope at the same time on an existing env
+          #    var is not allowed. Run the set command separately for each update."
+          netlify env:set DATABASE_URL --force \
             --scope builds functions runtime
-          npx --yes netlify-cli@27 env:list --context deploy-preview
+
+          netlify env:list --context deploy-preview
 
       - name: Apply database migrations
         if: env.IS_PRODUCTION == 'true'
@@ -125,9 +138,9 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           if [ "$IS_PRODUCTION" = 'true' ]; then
-            npx --yes netlify-cli@27 deploy --build --prod --json > deploy.json
+            netlify deploy --build --prod --json > deploy.json
           else
-            npx --yes netlify-cli@27 deploy --build \
+            netlify deploy --build \
               --context deploy-preview \
               --alias "deploy-preview-$PR_NUMBER" --json > deploy.json
           fi
