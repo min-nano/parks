@@ -92,15 +92,15 @@ jobs:
 
       # Points the preview at its own database.
       #
-      # `--scope` decides which parts of Netlify may read the value. The Next
-      # server handler runs as a Netlify Function, so `functions` and `runtime`
-      # are the scopes that matter at request time; `builds` keeps it available
-      # to the build itself.
-      #
       # Both contexts are written: `branch:<head ref>` is what Netlify's git
       # integration resolves, and `deploy-preview` is what a manual CLI deploy
-      # can match, since such a deploy carries no git branch. `env:list` prints
-      # the resulting configuration so a failure is diagnosable from the log.
+      # would match, since such a deploy carries no git branch.
+      #
+      # No `--scope` is passed: env:list showed the value already lands with
+      # scope "All", which covers functions and runtime. Setting the scope
+      # explicitly changed nothing, and it cannot be combined with --context on
+      # an existing variable anyway ("Setting the context and scope at the same
+      # time on an existing env var is not allowed").
       #
       # The deploy-preview value is shared, so two pull requests deploying at the
       # same moment can race for it. Netlify's git integration removes that.
@@ -110,17 +110,12 @@ jobs:
           DB_URL: ${{ steps.neon.outputs.db_url }}
           HEAD_REF: ${{ github.head_ref }}
         run: |
-          # The value first, which also creates the variable on the first run.
           netlify env:set DATABASE_URL "$DB_URL" --force \
             --context "branch:$HEAD_REF" deploy-preview
 
-          # Then the scope, as a separate call. Netlify rejects setting context
-          # and scope together once the variable exists:
-          #   "Setting the context and scope at the same time on an existing env
-          #    var is not allowed. Run the set command separately for each update."
-          netlify env:set DATABASE_URL --force \
-            --scope builds functions runtime
-
+          # Prints the resulting configuration. This is what confirmed the value
+          # is stored correctly and that the deploy-side behaviour below is not a
+          # configuration mistake.
           netlify env:list --context deploy-preview
 
       - name: Apply database migrations
@@ -148,10 +143,8 @@ jobs:
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Deployed to $url" >> "$GITHUB_STEP_SUMMARY"
 
-      # Proves the deployment boots *and* reached its database. Asserting
-      # demoMode is false is what stops a preview from passing while silently
-      # falling back to the in-process database — see the note in README about
-      # netlify/cli#6898.
+      # Proves the deployment boots, and for production that it reached its
+      # database. A preview cannot: see the demoMode branch below.
       - name: Smoke test the deployment
         env:
           URL: ${{ steps.deploy.outputs.url }}
@@ -199,10 +192,17 @@ jobs:
               ;;
           esac
 
-          # Production must reach the real database. A preview only warns for
-          # now: whether a CLI deploy can read the site's environment variables
-          # depends on the value's scope, and the run above is what tells us.
-          # Once a preview reports demoMode:false this becomes an error too.
+          # Production must reach the real database; a preview built by the CLI
+          # cannot, so it only warns.
+          #
+          # `--alias` without `--prod` produces a draft deploy, and Netlify does
+          # not inject the site's environment variables into a draft deploy's
+          # functions at runtime (netlify/cli#6898). The env:list above proves
+          # this is not a misconfiguration: DATABASE_URL is stored in the
+          # deploy-preview context with scope "All", and the deploy still comes
+          # up in demo mode. The CLI has no flag for a non-draft, non-production
+          # deploy, so connecting the repository to Netlify's git integration is
+          # the only way to close this gap. See README.
           case "$body" in
             *'"demoMode":true'*)
               if [ "$IS_PRODUCTION" = 'true' ]; then
