@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@clerk/nextjs": "^7.7.1",
-    "@electric-sql/pglite": "^0.5.4",
+    "@electric-sql/pglite": "^0.5.7",
     "@neondatabase/serverless": "^1.1.0",
     "@vis.gl/react-google-maps": "^1.9.0",
     "drizzle-orm": "^0.45.2",
